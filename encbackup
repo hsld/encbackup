@@ -99,9 +99,12 @@ backup_encrypt() {
 
     get_passphrase "encrypt"
 
-    local base_name dir_name
-    base_name="$(basename -- "$source")"
-    dir_name="$(dirname -- "$source")"
+    local abs_source
+    abs_source="$(realpath -e "$source")" || { echo "Error: cannot resolve path $source" >&2; exit 1; }
+    local base_name
+    base_name="$(basename -- "$abs_source")"
+    local dir_name
+    dir_name="$(dirname -- "$abs_source")"
 
     # tar (preserve xattrs/acls, numeric owners) -> lz4 -> gpg AES256 (passphrase via stdin)
     if tar --xattrs --acls --numeric-owner -cpf - -C "$dir_name" "$base_name" |
