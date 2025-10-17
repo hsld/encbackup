@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+IFS=$'\n\t'
+
+# --- Help
+display_help() {
+    cat <<'EOF'
+Usage: secure-archive [options] (-e | --encrypt | -d | --decrypt) source destination
+
+Modes:
+  -e, --encrypt     Compress and encrypt the directory or file.
+  -d, --decrypt     Decrypt and extract the encrypted file.
+
+Arguments:
+  source            The directory or file to encrypt (encrypt mode), or the encrypted file (decrypt mode).
+  destination       The output file to write (encrypt), or the extraction directory (decrypt).
+
+Options:
+  -h, --help                 Show this help and exit.
+  --passphrase-file FILE     Read passphrase from FILE.
+  --passphrase VAR           Read passphrase from environment variable VAR.
+
+Examples:
+  Encrypt: secure-archive --encrypt /path/to/source /path/to/archive.gpg
+  Decrypt: secure-archive --decrypt /path/to/archive.gpg /path/to/restore_dir
+EOF
+}
+
+# --- Dependency check
+check_dependencies() {
+    local deps=(tar lz4 gpg)
+    for cmd in "${deps[@]}"; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            printf 'Error: required command not found: %s\n' "$cmd" >&2
+            exit 1
+        fi
+    done
+}
+
+# --- Passphrase acquisition
+# Sets global variable: passphrase
+get_passphrase() {
+    local mode="$1"
+
+    if [ -n "${PASSPHRASE:-}" ]; then
+        passphrase="$PASSPHRASE"
+    elif [ -n "${PASSPHRASE_FILE:-}" ]; then
+        if [ -f "$PASSPHRASE_FILE" ]; then
+            # Optional: warn if permissive perms
+            if command -v stat >/dev/null 2>&1; then
+                if [ "$(stat -c %a "$PASSPHRASE_FILE" 2>/dev/null || echo 600)" -gt 600 ]; then
+                    printf 'Warning: passphrase file has permissive permissions: %s\n' "$PASSPHRASE_FILE" >&2
+                fi
+            fi
+            passphrase="$(cat -- "$PASSPHRASE_FILE")"
+        else
+            printf 'Error: passphrase file not found: %s\n' "$PASSPHRASE_FILE" >&2
+            exit 1
+        fi
+    else
+        if [ "$mode" = "encrypt" ]; then
+            read -r -s -p "Enter passphrase: " passphrase1
+            echo
+            read -r -s -p "Confirm passphrase: " passphrase2
+            echo
+            if [ "$passphrase1" != "$passphrase2" ]; then
+                printf 'Error: passphrases do not match\n' >&2
+                exit 1
+            fi
+            passphrase="$passphrase1"
+            unset passphrase1 passphrase2
+        else
+            read -r -s -p "Enter passphrase: " passphrase
+            echo
+        fi
+    fi
+}
+
+# --- Encrypt
+backup_encrypt() {
+    local source="$1"
+    local destination="$2"
+
+    if [ ! -e "$source" ]; then
+        printf 'Error: source does not exist: %s\n' "$source" >&2
+        exit 1
+    fi
+
+    # Ensure destination directory exists
+    mkdir -p -- "$(dirname -- "$destination")"
+
+    get_passphrase "encrypt"
+
+    local base_name dir_name
+    base_name="$(basename -- "$source")"
+    dir_name="$(dirname -- "$source")"
+
+    # tar (preserve xattrs/acls, numeric owners) -> lz4 -> gpg AES256 (passphrase via stdin)
+    if tar --xattrs --acls --numeric-owner -cpf - -C "$dir_name" "$base_name" |
+        lz4 -9 |
+        { printf '%s' "$passphrase" | gpg --symmetric --cipher-algo AES256 --batch --pinentry-mode loopback --passphrase-fd 0; } \
+            >"$destination"; then
+        printf 'Encryption successful: %s\n' "$destination"
+    else
+        printf 'Error: encryption failed\n' >&2
+        exit 1
+    fi
+
+    unset passphrase
+}
+
+# --- Decrypt
+backup_decrypt() {
+    local source="$1"
+    local destination="$2"
+
+    if [ ! -f "$source" ]; then
+        printf 'Error: encrypted file not found: %s\n' "$source" >&2
+        exit 1
+    fi
+
+    # Ensure output directory exists
+    mkdir -p -- "$destination"
+
+    get_passphrase "decrypt"
+
+    # gpg (passphrase via stdin) -> lz4 -d -> tar extract (preserve xattrs/acls)
+    if { printf '%s' "$passphrase" | gpg --batch --pinentry-mode loopback --passphrase-fd 0 --decrypt "$source"; } |
+        lz4 -d |
+        tar --xattrs --acls -xpf - -C "$destination"; then
+        printf 'Decryption successful. Files extracted to: %s\n' "$destination"
+    else
+        printf 'Error: decryption failed\n' >&2
+        exit 1
+    fi
+
+    unset passphrase
+}
+
+# --- Main
+# Parse cli arguments, validate inputs, and dispatch to encrypt or decrypt mode
+main() {
+    local mode=""
+    local source=""
+    local destination=""
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+        -e | --encrypt) mode="encrypt" ;;
+        -d | --decrypt) mode="decrypt" ;;
+        -h | --help)
+            display_help
+            exit 0
+            ;;
+        --passphrase-file)
+            shift || true
+            PASSPHRASE_FILE="${1:-}"
+            if [ -z "${PASSPHRASE_FILE:-}" ]; then
+                printf 'Error: --passphrase-file requires a file path\n' >&2
+                exit 1
+            fi
+            ;;
+        --passphrase)
+            shift || true
+            PASSPHRASE_VAR="${1:-}"
+            if [ -z "${PASSPHRASE_VAR:-}" ]; then
+                printf 'Error: --passphrase requires an environment variable name\n' >&2
+                exit 1
+            fi
+            PASSPHRASE="${!PASSPHRASE_VAR:-}"
+            if [ -z "${PASSPHRASE:-}" ]; then
+                printf 'Error: environment variable not set: %s\n' "$PASSPHRASE_VAR" >&2
+                exit 1
+            fi
+            ;;
+        --)
+            shift
+            break
+            ;;
+        -*)
+            printf 'Error: unknown option: %s\n' "$1" >&2
+            display_help
+            exit 1
+            ;;
+        *)
+            if [ -z "$source" ]; then
+                source="$1"
+            elif [ -z "$destination" ]; then
+                destination="$1"
+            else
+                printf 'Error: too many arguments\n' >&2
+                display_help
+                exit 1
+            fi
+            ;;
+        esac
+        shift || true
+    done
+
+    if [ -z "$mode" ]; then
+        printf 'Error: mode not specified. Use -e/--encrypt or -d/--decrypt.\n' >&2
+        display_help
+        exit 1
+    fi
+    if [ -z "$source" ] || [ -z "$destination" ]; then
+        printf 'Error: source and destination must be specified.\n' >&2
+        display_help
+        exit 1
+    fi
+
+    check_dependencies
+
+    case "$mode" in
+    encrypt) backup_encrypt "$source" "$destination" ;;
+    decrypt) backup_decrypt "$source" "$destination" ;;
+    *)
+        printf 'Error: invalid mode: %s\n' "$mode" >&2
+        display_help
+        exit 1
+        ;;
+    esac
+}
+
+main "$@"
