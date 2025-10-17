@@ -1,7 +1,6 @@
 # encbackup
 
-A lightweight Bash utility to compress and encrypt or decrypt and extract directories and files using tar, lz4, and gpg.  
-It is intended for simple, secure, and scriptable backups without leaving unencrypted data on disk.
+A lightweight Bash utility to compress and encrypt or decrypt and extract directories and files using tar, lz4, and gpg.  It is intended for simple, secure, and scriptable backups without leaving unencrypted data on disk.
 
 ---
 
