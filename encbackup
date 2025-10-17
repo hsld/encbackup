@@ -45,6 +45,17 @@ Examples:
 EOF
 }
 
+# --- Dependency check
+check_dependencies() {
+    local deps=(tar lz4 gpg)
+    for cmd in "${deps[@]}"; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            printf 'Error: required command not found: %s\n' "$cmd" >&2
+            exit 1
+        fi
+    done
+}
+
 # --- Passphrase acquisition
 # Sets global variable: passphrase
 get_passphrase() {
@@ -84,6 +95,16 @@ get_passphrase() {
     fi
 }
 
+# --- Path resolution (portable)
+abs_path() {
+    # prints absolute, physical path of $1
+    local tgt="$1"
+    local d b
+    d="$(dirname -- "$tgt")"
+    b="$(basename -- "$tgt")"
+    (cd -- "$d" >/dev/null 2>&1 && printf '%s/%s\n' "$(pwd -P)" "$b")
+}
+
 # --- Encrypt
 backup_encrypt() {
     local source="$1"
@@ -94,29 +115,33 @@ backup_encrypt() {
         exit 1
     fi
 
-    # Ensure destination directory exists
     mkdir -p -- "$(dirname -- "$destination")"
 
     get_passphrase "encrypt"
 
-    local abs_source
-    abs_source="$(realpath -e "$source")" || { echo "Error: cannot resolve path $source" >&2; exit 1; }
-    local base_name
+    local abs_source base_name dir_name
+    abs_source="$(abs_path "$source")" || {
+        echo "Error: cannot resolve path $source" >&2
+        exit 1
+    }
     base_name="$(basename -- "$abs_source")"
-    local dir_name
     dir_name="$(dirname -- "$abs_source")"
 
-    # tar (preserve xattrs/acls, numeric owners) -> lz4 -> gpg AES256 (passphrase via stdin)
+    # tar -> lz4 -> gpg (stdin=data). Passphrase via anonymous FD.
+    # Opens FD in variable ppfd, closes it after gpg spawn.
+    exec {ppfd}<<<"$passphrase"
     if tar --xattrs --acls --numeric-owner -cpf - -C "$dir_name" "$base_name" |
         lz4 -9 |
-        { printf '%s' "$passphrase" | gpg --symmetric --cipher-algo AES256 --batch --pinentry-mode loopback --passphrase-fd 0; } \
+        gpg --symmetric --cipher-algo AES256 --batch --pinentry-mode loopback \
+            --passphrase-fd "$ppfd" \
             >"$destination"; then
         printf 'Encryption successful: %s\n' "$destination"
     else
         printf 'Error: encryption failed\n' >&2
+        exec {ppfd}>&- || true
         exit 1
     fi
-
+    exec {ppfd}>&- || true
     unset passphrase
 }
 
@@ -130,26 +155,26 @@ backup_decrypt() {
         exit 1
     fi
 
-    # Ensure output directory exists
     mkdir -p -- "$destination"
 
     get_passphrase "decrypt"
 
-    # gpg (passphrase via stdin) -> lz4 -d -> tar extract (preserve xattrs/acls)
-    if { printf '%s' "$passphrase" | gpg --batch --pinentry-mode loopback --passphrase-fd 0 --decrypt "$source"; } |
+    # gpg -> lz4 -d -> tar extract
+    exec {ppfd}<<<"$passphrase"
+    if gpg --batch --pinentry-mode loopback --passphrase-fd "$ppfd" --decrypt --output - -- "$source" |
         lz4 -d |
         tar --xattrs --acls -xpf - -C "$destination"; then
         printf 'Decryption successful. Files extracted to: %s\n' "$destination"
     else
         printf 'Error: decryption failed\n' >&2
+        exec {ppfd}>&- || true
         exit 1
     fi
-
+    exec {ppfd}>&- || true
     unset passphrase
 }
 
 # --- Main
-# Parse cli arguments, validate inputs, and dispatch to encrypt or decrypt mode
 main() {
     local mode=""
     local source=""
