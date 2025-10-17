@@ -43,6 +43,27 @@ Examples:
   Encrypt: secure-archive --encrypt /path/to/source /path/to/archive.gpg
   Decrypt: secure-archive --decrypt /path/to/archive.gpg /path/to/restore_dir
 EOF
+}display_help() {
+    cat <<'EOF'
+Usage: secure-archive [options] (-e | --encrypt | -d | --decrypt) source destination
+
+Modes:
+  -e, --encrypt     Compress and encrypt the directory or file.
+  -d, --decrypt     Decrypt and extract the encrypted file.
+
+Arguments:
+  source            The directory or file to encrypt (encrypt mode), or the encrypted file (decrypt mode).
+  destination       The output file to write (encrypt), or the extraction directory (decrypt).
+
+Options:
+  -h, --help                 Show this help and exit.
+  --passphrase-file FILE     Read passphrase from FILE.
+  --passphrase VAR           Read passphrase from environment variable VAR.
+
+Examples:
+  Encrypt: secure-archive --encrypt /path/to/source /path/to/archive.gpg
+  Decrypt: secure-archive --decrypt /path/to/archive.gpg /path/to/restore_dir
+EOF
 }
 
 # --- Dependency check
