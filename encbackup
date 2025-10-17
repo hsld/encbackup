@@ -24,7 +24,7 @@ IFS=$'\n\t'
 # --- Help
 display_help() {
     cat <<'EOF'
-Usage: secure-archive [options] (-e | --encrypt | -d | --decrypt) source destination
+Usage: encbackup [options] (-e | --encrypt | -d | --decrypt) source destination
 
 Modes:
   -e, --encrypt     Compress and encrypt the directory or file.
@@ -40,41 +40,9 @@ Options:
   --passphrase VAR           Read passphrase from environment variable VAR.
 
 Examples:
-  Encrypt: secure-archive --encrypt /path/to/source /path/to/archive.gpg
-  Decrypt: secure-archive --decrypt /path/to/archive.gpg /path/to/restore_dir
+  Encrypt: encbackup --encrypt /path/to/source /path/to/archive.gpg
+  Decrypt: encbackup --decrypt /path/to/archive.gpg /path/to/restore_dir
 EOF
-}display_help() {
-    cat <<'EOF'
-Usage: secure-archive [options] (-e | --encrypt | -d | --decrypt) source destination
-
-Modes:
-  -e, --encrypt     Compress and encrypt the directory or file.
-  -d, --decrypt     Decrypt and extract the encrypted file.
-
-Arguments:
-  source            The directory or file to encrypt (encrypt mode), or the encrypted file (decrypt mode).
-  destination       The output file to write (encrypt), or the extraction directory (decrypt).
-
-Options:
-  -h, --help                 Show this help and exit.
-  --passphrase-file FILE     Read passphrase from FILE.
-  --passphrase VAR           Read passphrase from environment variable VAR.
-
-Examples:
-  Encrypt: secure-archive --encrypt /path/to/source /path/to/archive.gpg
-  Decrypt: secure-archive --decrypt /path/to/archive.gpg /path/to/restore_dir
-EOF
-}
-
-# --- Dependency check
-check_dependencies() {
-    local deps=(tar lz4 gpg)
-    for cmd in "${deps[@]}"; do
-        if ! command -v "$cmd" >/dev/null 2>&1; then
-            printf 'Error: required command not found: %s\n' "$cmd" >&2
-            exit 1
-        fi
-    done
 }
 
 # --- Passphrase acquisition
